@@ -1,0 +1,10 @@
+# Prefer the exact working versions in your current environment.
+# These are the direct dependencies, not a tested version lock.
+numpy
+scipy
+shapely
+mujoco
+robosuite>=1.5,<2
+imageio
+imageio-ffmpeg
+Pillow
