@@ -295,7 +295,7 @@ def rotate_forward(r,kind):
 
 def run_forward(r,args,angle,model):
     init=r.start(); r.expected_initial=init.sig.copy()
-    recorder=DemoRecorder(); recorder.observe(r.obs,r.env,r.m,ok(r.m,r.env))
+    recorder=getattr(r, "recorder_factory", DemoRecorder)(); recorder.observe(r.obs,r.env,r.m,ok(r.m,r.env))
     r.recording=recorder; r.best_forward=init
     expert=make_expert(r.env,args); idle=0; reason='step_cap'; log=[]
     # Preserve the original staged controller. The only differences from

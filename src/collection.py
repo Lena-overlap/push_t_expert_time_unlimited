@@ -81,13 +81,19 @@ def run_case(a,out,seed,angle,record_video):
     # New environment per case, matching original physics and observation schema.
     video_error=''; video_path=''; video_frames=0; video_replay_steps=0
     max_steps=a.max_steps; strategy="loop"
-    try: env=make_env(record_video,max_steps)
+    vision=None
+    capture=bool(getattr(a,"act_images",False))
+    try: env=make_env(record_video or capture,max_steps)
     except Exception as exc:
-        if not record_video: raise
+        if capture or not record_video: raise
         video_error=str(exc); print(f'Offscreen unavailable: {exc}; continuing without video',flush=True); env=make_env(False,max_steps)
     start=time.monotonic(); trial_log=[]; error=''; result=None; rec=None
     try:
         r=Runner(env,lambda:exact_yaw_reset(env,seed,angle,reseed),a.stable,max_steps)
+        if capture:
+            from vision_data import VisionRecorder
+            vision=VisionRecorder(out/"act_demos"/f"seed_{seed}_{angle:+.4f}.hdf5",a.act_cameras,a.act_size)
+            r.recorder_factory=lambda:vision
         init,final,best,win,rec,trial_log,forward_reason=run_forward(r,a,angle,model)
         if abs(np.rad2deg(wrapped(init.q[2]+np.deg2rad(angle))))>.05 or not valid(init.metrics):
             raise RuntimeError(f'Initial reset mismatch for seed {seed}')
@@ -115,11 +121,14 @@ def run_case(a,out,seed,angle,record_video):
             video_path,video_frames,video_error=record_selected_video(r,trace_node,out/'videos'/f'seed_{seed}_{"success" if demo_ok else "best_failure"}.mp4',a,label)
             video_replay_steps=r.executed-before
             if video_error: print(f'Video error for {seed}: {video_error}',flush=True)
+        row.update(act_path=str(vision.path) if demo_ok and vision is not None else "")
         row.update(baseline_evaluated_steps=final.steps if final is not None else '')
         row.update(total_wall_seconds=round(time.monotonic()-start,2),video_selected=record_video,video_path=video_path,video_frames=video_frames,video_error=video_error,video_replay_steps=video_replay_steps)
         return row, trial_log
     finally:
-        env.close()
+        try:
+            if vision is not None: vision.close()
+        finally: env.close()
 
 
 def read_cases(path):
@@ -167,8 +176,13 @@ def main(root):
     vg=parser.add_mutually_exclusive_group(); vg.add_argument('--video',action='store_true',help='Record selected or best failure trajectory'); vg.add_argument('--no-video',action='store_true')
     parser.add_argument('--video-count',type=int,default=None,help='Record only N representative cases, chosen before testing; requires --video')
     parser.add_argument('--camera',default='agentview'); parser.add_argument('--width',type=int,default=640); parser.add_argument('--height',type=int,default=480)
+    parser.add_argument("--act-images",action="store_true",help="Save synchronous RGB/proprioception HDF5 for ACT")
+    parser.add_argument("--act-cameras",nargs="+",default=["birdview","agentview"])
+    parser.add_argument("--act-size",type=int,default=224,help="Square RGB resolution")
     a=parser.parse_args(); a.fresh = a.fresh or not (a.collect or a.cases_file); a.rotation_model=str(root/'config/contact_model.json'); a.response_model=str(root/'config/contact_response_model.json')
     a.strategy='loop'
+    if a.act_size<64 or a.act_size>512: parser.error("--act-size must be 64–512")
+    if len(set(a.act_cameras))!=len(a.act_cameras): parser.error("Duplicate ACT camera")
     if not 100<=a.max_steps<=10000: parser.error("--max-steps must be between 100 and 10000")
     if min(a.width,a.height)<240 or a.width%16 or a.height%16: parser.error('Video dimensions must be multiples of 16, at least 240')
     if not 1<=a.stable<=40: parser.error('Invalid stable-step count')
@@ -195,7 +209,7 @@ def main(root):
     out=a.output or root/'results'/('collect' if a.collect else 'fresh' if a.fresh else 'cases')
     if a.wide_angles and a.output is None: out=out.with_name(out.name+'_90_180')
     out=Path(out)
-    if (out/'summary.csv').exists() or (out/'demos').exists():
+    if (out/'summary.csv').exists() or (out/'demos').exists() or (out/'act_demos').exists():
         if a.output is not None: parser.error('Output directory already contains results; choose a new --output')
         out=out.with_name(out.name+'_'+time.strftime('%Y%m%d_%H%M%S'))
         i=1
